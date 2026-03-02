@@ -3,113 +3,130 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import random
-import time
 from datetime import datetime
+import pytz
+
+# 設定台灣時區
+tw_tz = pytz.timezone('Asia/Taipei')
 
 # --- 1. 爬蟲模組 ---
 def fetch_bingo_data():
     try:
         url = "https://winwin.tw/Bingo"
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         resp = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(resp.text, 'html.parser')
         
-        # 抓取表格資料 (需根據實際 DOM 調整)
+        # 修正後的抓取邏輯：針對 winwin.tw 結構
         rows = soup.select('tr')
         data = []
-        for row in rows[1:21]: # 取前 20 期
-            cols = row.find_all('td')
-            if len(cols) >= 2:
-                period = cols[0].text.strip()
-                # 假設號碼在特定 class 中，winwin 通常用 div 或 span 包裹球號
-                nums = [int(n.text) for n in cols[1].find_all('span') if n.text.isdigit()]
-                if nums:
-                    data.append({"period": period, "numbers": nums})
+        for row in rows:
+            tds = row.find_all('td')
+            if len(tds) >= 2:
+                period = tds[0].get_text(strip=True)
+                # 抓取包含開獎球號的 span
+                balls = [int(s.text) for s in tds[1].select('span.ball_orange, span.ball_blue') if s.text.isdigit()]
+                if len(balls) >= 20:
+                    data.append({"period": period, "numbers": balls[:20]})
         return data
     except Exception as e:
-        st.error(f"爬蟲出錯: {e}")
-        return []
+        return None
 
-# --- 2. 費波那契與黃金分割分析 ---
-def fibonacci_analysis(history):
-    # 統計頻率
+# --- 2. 費波那契預測邏輯 ---
+def predict_next(history):
+    if not history: return random.sample(range(1, 81), 20)
     all_nums = [n for h in history for n in h['numbers']]
     freq = pd.Series(all_nums).value_counts().to_dict()
-    
-    # 費波那契數列 (作為索引權重)
-    fib = [1, 2, 3, 5, 8, 13, 21, 34, 55]
-    
-    # 黃金分割過濾 (目標：大號 12 顆, 小號 8 顆 或反之)
-    # 1. 根據頻率排序
     sorted_balls = sorted(range(1, 81), key=lambda x: freq.get(x, 0), reverse=True)
     
-    # 2. 應用黃金比例 (12:8 分布)
-    top_pool = sorted_balls[:34] # 取前 34 名(Fib數)作為精選池
-    
-    # 模擬 20 顆預測號
-    # 確保符合黃金分割：大(>40)與小(<=40)的比例接近 0.618
+    # 黃金比例過濾 (大號 12, 小號 8)
+    top_pool = sorted_balls[:34] 
     pred_small = [n for n in top_pool if n <= 40]
     pred_large = [n for n in top_pool if n > 40]
     
-    final_pred = random.sample(pred_small, 8) + random.sample(pred_large, 12)
+    final_pred = random.sample(pred_small, min(len(pred_small), 8)) + \
+                 random.sample(pred_large, min(len(pred_large), 12))
     return sorted(final_pred)
 
-# --- 3. Streamlit 網頁介面 ---
-st.set_page_config(page_title="Bingo Pro 預測器", layout="wide")
-st.title("🎰 Bingo Bingo 智慧分析預測器")
+# --- 3. Streamlit 介面 ---
+st.set_page_config(page_title="Bingo Pro 智慧預測", layout="wide")
 
-# 自動更新邏輯
-if 'last_update' not in st.session_state:
-    st.session_state.last_update = datetime.now()
+# 初始化 Session State
+if 'my_bets' not in st.session_state: st.session_state.my_bets = []
+if 'selected_nums' not in st.session_state: st.session_state.selected_nums = []
 
-# 側邊欄：模擬投注
-st.sidebar.header("📝 模擬投注 (最多 10 注)")
-if 'my_bets' not in st.session_state:
-    st.session_state.my_bets = []
+st.title("🎰 BINGO BINGO 智慧分析預測器")
 
-bet_input = st.sidebar.text_input("輸入 6 個號碼 (空白隔開)", placeholder="如: 05 12 21 34 55 68")
-if st.sidebar.button("加入投注"):
-    nums = [int(x) for x in bet_input.split() if x.isdigit()]
-    if len(nums) == 6 and len(st.session_state.my_bets) < 10:
-        st.session_state.my_bets.append(nums)
-        st.success("已加入！")
-    else:
-        st.error("請輸入正確 6 碼或已達 10 注上限")
-
-if st.sidebar.button("清除所有投注"):
-    st.session_state.my_bets = []
-
-# 主畫面
+# 獲取資料
 data = fetch_bingo_data()
+now_tw = datetime.now(tw_tz).strftime('%Y-%m-%d %H:%M:%S')
 
+# 左側側邊欄：投注設定
+with st.sidebar:
+    st.header("📝 模擬投注設定")
+    star_type = st.selectbox("選擇星等", options=range(1, 11), index=5, help="決定你需要選幾個號碼")
+    
+    st.write(f"已選擇 ({len(st.session_state.selected_nums)}/{star_type})")
+    
+    # 號碼選擇小面板 (1-80)
+    cols = st.columns(8)
+    for i in range(1, 81):
+        btn_type = "primary" if i in st.session_state.selected_nums else "secondary"
+        if cols[(i-1)%8].button(f"{i:02}", key=f"btn_{i}"):
+            if i in st.session_state.selected_nums:
+                st.session_state.selected_nums.remove(i)
+            elif len(st.session_state.selected_nums) < star_type:
+                st.session_state.selected_nums.append(i)
+            st.rerun()
+
+    if st.button("🎲 隨機產生", use_container_width=True):
+        st.session_state.selected_nums = random.sample(range(1, 81), star_type)
+        st.rerun()
+
+    if st.button("➕ 加入投注清單", variant="primary", use_container_width=True):
+        if len(st.session_state.selected_nums) == star_type:
+            if len(st.session_state.my_bets) < 10:
+                st.session_state.my_bets.append({"star": star_type, "nums": sorted(st.session_state.selected_nums)})
+                st.session_state.selected_nums = []
+                st.success("成功加入！")
+                st.rerun()
+            else: st.error("最多 10 注！")
+        else: st.error(f"請選滿 {star_type} 個號碼")
+
+    if st.button("🗑️ 清空所有投注", use_container_width=True):
+        st.session_state.my_bets = []
+        st.rerun()
+
+# 主畫面內容
 if data:
     latest = data[0]
-    st.subheader(f"📍 最新開獎期號: {latest['period']}")
+    st.success(f"✅ 資料已同步 | 最新期號: {latest['period']} | 台灣時間: {now_tw}")
     
-    # 顯示球號
-    cols = st.columns(10)
-    for i, n in enumerate(latest['numbers']):
-        cols[i % 10].markdown(f"### :blue[{n:02d}]")
+    # 顯示最新號碼
+    ball_html = "".join([f'<span style="background-color:#1E90FF; color:white; border-radius:50%; width:35px; height:35px; display:inline-flex; align-items:center; justify-content:center; margin:3px; font-weight:bold;">{n:02d}</span>' for n in latest['numbers']])
+    st.markdown(ball_html, unsafe_allow_html=True)
 
-    # 執行預測
-    st.divider()
-    prediction = fibonacci_analysis(data)
-    st.subheader("🔮 費波那契+黃金分割 預測下一期 (20碼)")
-    st.write(f"系統建議號碼： {' , '.join([f'{n:02d}' for n in prediction])}")
+    # 顯示預測
+    pred_nums = predict_next(data)
+    st.info(f"🔮 智慧預測下一期建議號碼：{', '.join([f'{n:02d}' for n in pred_nums])}")
 
-    # 對獎系統
+    # 顯示投注清單 (解決你看不到投注號碼的問題)
     if st.session_state.my_bets:
-        st.subheader("🎯 模擬投注對獎結果")
-        for i, bet in enumerate(st.session_state.my_bets):
-            matches = set(bet) & set(latest['numbers'])
-            st.write(f"第 {i+1} 注 {bet} -> **中 {len(matches)} 顆** ({' , '.join(map(str, matches))})")
-
-    # 顯示前十期
+        st.subheader("📋 我的模擬投注清單")
+        for i, b in enumerate(st.session_state.my_bets):
+            matches = set(b['nums']) & set(latest['numbers'])
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.write(f"第 {i+1} 注 ({b['star']}星): {' '.join([f'{n:02d}' for n in b['nums']])}")
+            with col2:
+                st.markdown(f"**中 {len(matches)} 顆**" if len(matches)>0 else "未中獎")
+    
+    # 歷史紀錄表格
     st.divider()
-    st.subheader("📊 近 10 期開獎記錄")
-    st.table(pd.DataFrame(data[:10]))
+    st.subheader("📊 最近十期開獎紀錄")
+    df_history = pd.DataFrame(data[:10])
+    st.table(df_history)
 
 else:
-    st.warning("正在嘗試連接 winwin.tw 資料源...")
-
-st.info(f"最後更新時間: {datetime.now().strftime('%H:%M:%S')} (每 5 分鐘自動刷新)")
+    st.warning("⚠️ 無法連線至開獎來源，請檢查網路或稍後再試。")
+    if st.button("重新嘗試連接"): st.rerun()
