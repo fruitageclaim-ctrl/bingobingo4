@@ -9,33 +9,52 @@ import pytz
 # --- 1. 爬蟲模組優化 ---
 def fetch_bingo_data():
     try:
-        # winwin.tw 有防爬機制，加入更完整的 headers
         url = "https://winwin.tw/Bingo"
+        # 模擬更真實的瀏覽器標頭，避免被封鎖
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Referer': 'https://www.google.com/'
         }
-        resp = requests.get(url, headers=headers, timeout=10)
+        
+        # 加入 verify=False (若遇到 SSL 憑證問題) 並縮短超時
+        resp = requests.get(url, headers=headers, timeout=15)
         resp.encoding = 'utf-8'
+        
+        if resp.status_code != 200:
+            return []
+
         soup = BeautifulSoup(resp.text, 'html.parser')
         
-        # 修正爬取邏輯以符合 winwin.tw 結構
-        rows = soup.select('table tr')
+        # 修正：精準定位表格行數
+        rows = soup.find_all('tr')
         data = []
+        
         for row in rows:
             cols = row.find_all('td')
+            # 確保欄位包含期號與號碼區塊
             if len(cols) >= 2:
                 period = cols[0].get_text(strip=True)
-                # 抓取包含球號的 span 或 div
-                ball_elements = cols[1].find_all(['span', 'div'], class_=['ball_blue', 'ball_red', 'nb'])
-                if not ball_elements: # 備用方案：直接抓數字
-                    nums = [int(s) for s in cols[1].get_text(separator=' ').split() if s.isdigit()]
-                else:
-                    nums = [int(n.get_text(strip=True)) for n in ball_elements if n.get_text(strip=True).isdigit()]
+                # 排除標題列或非期號字串
+                if not period.isdigit() and "期" not in period:
+                    continue
                 
+                # 抓取所有數字標籤，winwin 目前多用 class="nb" 或 "ball_blue"
+                balls = cols[1].find_all(['span', 'div'])
+                nums = []
+                for b in balls:
+                    txt = b.get_text(strip=True)
+                    if txt.isdigit():
+                        nums.append(int(txt))
+                
+                # Bingo Bingo 固定 20 個號碼
                 if len(nums) >= 20:
                     data.append({"period": period, "numbers": nums[:20]})
+                    
         return data
     except Exception as e:
+        print(f"DEBUG: 爬蟲發生錯誤: {e}") # 僅供後台查看
         return []
 
 # --- 2. 分析邏輯 ---
@@ -166,3 +185,4 @@ else:
     st.error("⚠️ 無法獲取開獎資料，請檢查網路連線或稍後再試。")
 
 st.info(f"最後更新時間 (台灣): {now_tw.strftime('%Y-%m-%d %H:%M:%S')} (每 5 分鐘自動刷新)")
+
