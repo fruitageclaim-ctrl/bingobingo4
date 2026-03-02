@@ -9,7 +9,6 @@ import streamlit.components.v1 as components
 
 # --- 1. 爬蟲與備援模組 ---
 def fetch_bingo_data():
-    # 嘗試多個資料源，增加穩定性
     urls = ["https://winwin.tw/Bingo", "https://www.nanalotto.com/BINGO_BINGO"]
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     
@@ -34,9 +33,14 @@ def fetch_bingo_data():
     return []
 
 # --- 2. 分析邏輯 ---
+def get_hot_numbers(history, top_n=10):
+    if not history: return []
+    all_nums = [n for h in history for n in h['numbers']]
+    freq = pd.Series(all_nums).value_counts()
+    return freq.head(top_n).index.tolist()
+
 def fibonacci_analysis(history):
     if not history: 
-        # 若抓不到資料，使用隨機模擬熱門號碼
         return sorted(random.sample(range(1, 81), 20))
     all_nums = [n for h in history for n in h['numbers']]
     freq = pd.Series(all_nums).value_counts().to_dict()
@@ -51,7 +55,6 @@ def fibonacci_analysis(history):
 # --- 3. Streamlit 介面設定 ---
 st.set_page_config(page_title="Bingo Bingo 智慧預測器", layout="wide")
 
-# 自定義 CSS 縮小 1-80 號按鈕與側邊欄間距
 st.markdown("""
     <style>
     div[data-testid="column"] { padding: 0px !important; margin: 0px !important; }
@@ -63,6 +66,8 @@ st.markdown("""
         margin-bottom: 2px !important;
     }
     section[data-testid="stSidebar"] { width: 300px !important; }
+    /* 預測文字縮小適配手機側邊欄 */
+    .predict-text { font-size: 12px; color: #555; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -74,17 +79,15 @@ now_tw = datetime.now(tw_tz)
 
 st.title("🎰 Bingo Bingo 智慧分析預測器")
 
-# 獲取資料
 data = fetch_bingo_data()
 
-# --- 側邊欄：縮小型模擬投注 ---
+# --- 側邊欄：模擬投注 ---
 st.sidebar.header("📝 模擬投注")
 star_type = st.sidebar.selectbox("選擇玩法", [f"{i}星" for i in range(1, 11)], index=5)
 required_count = int(star_type.replace("星", ""))
 
 st.sidebar.write(f"選擇 {required_count} 個號碼：")
 
-# 1-80號 縮小面板 (改為 8 列，每列 10 個)
 for row in range(8):
     cols = st.sidebar.columns(10)
     for col in range(10):
@@ -122,12 +125,26 @@ if st.sidebar.button("🗑️ 清空所有投注"):
     st.session_state.my_bets = []
     st.rerun()
 
+# --- 新增功能區 (側邊欄底部) ---
+st.sidebar.divider()
+if data:
+    # 1. 統計熱門號碼
+    hot_nums = get_hot_numbers(data, top_n=10)
+    st.sidebar.subheader("🔥 熱門號碼 (出現頻率高)")
+    st.sidebar.markdown(f"<div class='predict-text'>{', '.join([f'{n:02d}' for n in hot_nums])}</div>", unsafe_allow_html=True)
+    
+    # 2. 費波那契預測
+    pred_nums = fibonacci_analysis(data)
+    st.sidebar.subheader("🔮 下期費波那契預測")
+    st.sidebar.markdown(f"<div class='predict-text'>{', '.join([f'{n:02d}' for n in pred_nums])}</div>", unsafe_allow_html=True)
+else:
+    st.sidebar.warning("無法取得資料進行分析")
+
 # --- 主畫面 ---
 t1, t2 = st.tabs(["即時開獎 (同步官方)", "預測分析與對獎"])
 
 with t1:
     st.subheader("🔗 winwin.tw 即時開獎看板")
-    # 使用 IFrame 直接加載網頁，解決伺服器抓不到資料的問題
     components.iframe("https://winwin.tw/Bingo", height=600, scrolling=True)
 
 with t2:
@@ -135,12 +152,11 @@ with t2:
         latest = data[0]
         st.success(f"✅ 資料已同步：最新期號 {latest['period']}")
         
-        # 預測區
+        # 主畫面也保留詳細顯示
         prediction = fibonacci_analysis(data)
-        st.subheader("🔮 下期費波那契預測 (20碼)")
+        st.subheader("🔮 下期費波那契預測 (20碼詳細)")
         st.code(", ".join([f"{n:02d}" for n in prediction]))
         
-        # 對獎
         if st.session_state.my_bets:
             st.subheader("🎯 我的模擬投注對獎")
             for i, bet in enumerate(st.session_state.my_bets):
