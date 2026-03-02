@@ -8,44 +8,29 @@ import pytz
 import streamlit.components.v1 as components
 
 # --- 1. 爬蟲與備援模組 ---
-import requests
-import pandas as pd
-
-def fetch_lotto_official_bingo():
-    try:
-        # 參考 TaiwanLotteryCrawler 的目標 URL
-        url = "https://www.taiwanlottery.com.tw/lotto/BINGOBINGO/drawing.aspx"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        
-        # 取得網頁內容
-        res = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        
-        # 根據專案中的解析邏輯，尋找開獎表格 (注意：台彩 DOM 可能隨時變動)
-        # 這裡示範如何抓取最新一期
-        data = []
-        table = soup.find('table', {'id': 'BINGOBINGO_Drawing_Data'}) # 假設 ID
-        if not table:
-            # 如果 ID 不對，嘗試抓取所有 tr
-            rows = soup.select('.table_org tr, .table_gre tr')
-        else:
-            rows = table.find_all('tr')
-
-        for row in rows:
-            cols = row.find_all('td')
-            if len(cols) >= 2:
-                period = cols[0].get_text(strip=True)
-                # 抓取該行內所有的號碼 (通常在 span 裡)
-                nums = [int(n.get_text()) for n in cols[1].find_all('span') if n.get_text().isdigit()]
-                if len(nums) >= 20:
-                    data.append({"period": period, "numbers": nums[:20]})
-        
-        return data
-    except Exception as e:
-        print(f"台彩官網抓取失敗: {e}")
-        return []
+def fetch_bingo_data():
+    urls = ["https://winwin.tw/Bingo", "https://www.nanalotto.com/BINGO_BINGO"]
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=5)
+            resp.encoding = 'utf-8'
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            rows = soup.select('table tr')
+            data = []
+            for row in rows:
+                cols = row.find_all('td')
+                if len(cols) >= 2:
+                    period = cols[0].get_text(strip=True)
+                    ball_elements = cols[1].find_all(['span', 'div', 'b'])
+                    nums = [int(n.get_text(strip=True)) for n in ball_elements if n.get_text(strip=True).isdigit()]
+                    if len(nums) >= 20:
+                        data.append({"period": period, "numbers": nums[:20]})
+            if data: return data
+        except:
+            continue
+    return []
 
 # --- 2. 分析邏輯 ---
 def get_hot_numbers(history, top_n=10):
@@ -181,4 +166,3 @@ with t2:
         st.warning("⚠️ 預測器目前無法分析歷史資料（伺服器連線受阻），但您仍可查看上方『即時開獎』標籤。")
 
 st.info(f"最後刷新 (台灣): {now_tw.strftime('%Y-%m-%d %H:%M:%S')}")
-
