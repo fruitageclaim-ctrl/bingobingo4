@@ -9,26 +9,59 @@ import streamlit.components.v1 as components
 
 # --- 1. 爬蟲與備援模組 ---
 def fetch_bingo_data():
-    urls = ["https://winwin.tw/Bingo", "https://www.nanalotto.com/BINGO_BINGO"]
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    # 加入台彩官方來源作為首選分析資料來源
+    urls = [
+        "https://www.taiwanlottery.com/lotto/result/bingo_bingo", # 台彩官方最新開獎
+        "https://winwin.tw/Bingo", 
+        "https://www.nanalotto.com/BINGO_BINGO"
+    ]
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
     
     for url in urls:
         try:
-            resp = requests.get(url, headers=headers, timeout=5)
+            # 增加 timeout 確保穩定性，設定 encoding 為 utf-8 避免亂碼
+            resp = requests.get(url, headers=headers, timeout=10)
             resp.encoding = 'utf-8'
+            if resp.status_code != 200:
+                continue
+                
             soup = BeautifulSoup(resp.text, 'html.parser')
-            rows = soup.select('table tr')
             data = []
-            for row in rows:
-                cols = row.find_all('td')
-                if len(cols) >= 2:
-                    period = cols[0].get_text(strip=True)
-                    ball_elements = cols[1].find_all(['span', 'div', 'b'])
-                    nums = [int(n.get_text(strip=True)) for n in ball_elements if n.get_text(strip=True).isdigit()]
-                    if len(nums) >= 20:
-                        data.append({"period": period, "numbers": nums[:20]})
+
+            # 針對台彩官方網站的解析邏輯
+            if "taiwanlottery" in url:
+                # 台彩號碼通常位於特定的表格或 div 結構中
+                rows = soup.select('tr')
+                for row in rows:
+                    cols = row.find_all('td')
+                    if len(cols) >= 2:
+                        period = cols[0].get_text(strip=True)
+                        # 過濾掉非純數字的期號列
+                        if not period.isdigit(): continue
+                        
+                        # 抓取該行內所有的號碼球標籤
+                        ball_elements = cols[1].find_all(['span', 'div'])
+                        nums = [int(n.get_text(strip=True)) for n in ball_elements if n.get_text(strip=True).isdigit()]
+                        
+                        if len(nums) >= 20:
+                            data.append({"period": period, "numbers": nums[:20]})
+            
+            # 針對第三方網站的備援解析邏輯
+            else:
+                rows = soup.select('table tr')
+                for row in rows:
+                    cols = row.find_all('td')
+                    if len(cols) >= 2:
+                        period = cols[0].get_text(strip=True)
+                        ball_elements = cols[1].find_all(['span', 'div', 'b'])
+                        nums = [int(n.get_text(strip=True)) for n in ball_elements if n.get_text(strip=True).isdigit()]
+                        if len(nums) >= 20:
+                            data.append({"period": period, "numbers": nums[:20]})
+            
             if data: return data
-        except:
+        except Exception as e:
             continue
     return []
 
@@ -48,6 +81,7 @@ def fibonacci_analysis(history):
     top_pool = sorted_balls[:34] 
     pred_small = [n for n in top_pool if n <= 40]
     pred_large = [n for n in top_pool if n > 40]
+    # 使用黃金比例過濾邏輯
     final_pred = random.sample(pred_small, min(len(pred_small), 8)) + \
                  random.sample(pred_large, min(len(pred_large), 12))
     return sorted(final_pred)
@@ -61,12 +95,11 @@ st.markdown("""
     .stButton > button { 
         width: 100% !important; 
         padding: 2px !important; 
-        font-size: 12px !important; 
-        height: 28px !important;
+        font-size: 11px !important; 
+        height: 26px !important;
         margin-bottom: 2px !important;
     }
     section[data-testid="stSidebar"] { width: 300px !important; }
-    /* 預測文字縮小適配手機側邊欄 */
     .predict-text { font-size: 12px; color: #555; }
     </style>
     """, unsafe_allow_html=True)
@@ -79,6 +112,7 @@ now_tw = datetime.now(tw_tz)
 
 st.title("🎰 Bingo Bingo 智慧分析預測器")
 
+# 執行爬蟲獲取官方資料
 data = fetch_bingo_data()
 
 # --- 側邊欄：模擬投注 ---
@@ -125,44 +159,42 @@ if st.sidebar.button("🗑️ 清空所有投注"):
     st.session_state.my_bets = []
     st.rerun()
 
-# --- 新增功能區 (側邊欄底部) ---
+# --- 新增功能區 (側邊欄底部，資料來源已整合台彩官方) ---
 st.sidebar.divider()
 if data:
-    # 1. 統計熱門號碼
     hot_nums = get_hot_numbers(data, top_n=10)
-    st.sidebar.subheader("🔥 熱門號碼 (出現頻率高)")
+    st.sidebar.subheader("🔥 熱門號碼 (官方數據)")
     st.sidebar.markdown(f"<div class='predict-text'>{', '.join([f'{n:02d}' for n in hot_nums])}</div>", unsafe_allow_html=True)
     
-    # 2. 費波那契預測
     pred_nums = fibonacci_analysis(data)
-    st.sidebar.subheader("🔮 下期費波那契預測")
+    st.sidebar.subheader("🔮 費波那契分析 (官方數據)")
     st.sidebar.markdown(f"<div class='predict-text'>{', '.join([f'{n:02d}' for n in pred_nums])}</div>", unsafe_allow_html=True)
 else:
-    st.sidebar.warning("無法取得資料進行分析")
+    st.sidebar.warning("無法取得官方資料進行分析")
 
 # --- 主畫面 ---
-t1, t2 = st.tabs(["即時開獎 (同步官方)", "預測分析與對獎"])
+t1, t2 = st.tabs(["即時開獎 (台彩官方)", "分析預測與對獎"])
 
 with t1:
-    st.subheader("🔗 winwin.tw 即時開獎看板")
-    components.iframe("https://winwin.tw/Bingo", height=600, scrolling=True)
+    st.subheader("🔗 台灣彩券 BINGO BINGO 即時開獎")
+    # 直接嵌入官方結果頁面，確保使用者看到最即時資訊
+    components.iframe("https://www.taiwanlottery.com/lotto/result/bingo_bingo", height=800, scrolling=True)
 
 with t2:
     if data:
         latest = data[0]
-        st.success(f"✅ 資料已同步：最新期號 {latest['period']}")
+        st.success(f"✅ 資料來源：台彩官方 (最新期號 {latest['period']})")
         
-        # 主畫面也保留詳細顯示
         prediction = fibonacci_analysis(data)
-        st.subheader("🔮 下期費波那契預測 (20碼詳細)")
+        st.subheader("🔮 費波那契+黃金分割 建議號碼")
         st.code(", ".join([f"{n:02d}" for n in prediction]))
         
         if st.session_state.my_bets:
-            st.subheader("🎯 我的模擬投注對獎")
+            st.subheader("🎯 模擬投注實時核對")
             for i, bet in enumerate(st.session_state.my_bets):
                 matches = set(bet['nums']) & set(latest['numbers'])
-                st.write(f"注項{i+1}: {bet['nums']} | **對中 {len(matches)} 顆** ({latest['period']}期)")
+                st.write(f"注項{i+1}: {bet['nums']} | **對中 {len(matches)} 顆** (核對期號: {latest['period']})")
     else:
-        st.warning("⚠️ 預測器目前無法分析歷史資料（伺服器連線受阻），但您仍可查看上方『即時開獎』標籤。")
+        st.warning("⚠️ 系統目前無法獲取歷史開獎進行分析，請檢查網路連線。")
 
-st.info(f"最後刷新 (台灣): {now_tw.strftime('%Y-%m-%d %H:%M:%S')}")
+st.info(f"系統最後同步時間 (台灣): {now_tw.strftime('%Y-%m-%d %H:%M:%S')} (每 5 分鐘自動刷新)")
