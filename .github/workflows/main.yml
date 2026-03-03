@@ -2,9 +2,13 @@ name: Bingo Data Updater
 
 on:
   schedule:
-    # 每 5 分鐘執行一次 (對應台灣時間 00, 05, 10... 等)
+    # 每 5 分鐘執行一次
     - cron: '*/5 * * * *'
   workflow_dispatch: # 允許手動觸發
+
+# 加入權限設定，確保 Action 有權利寫入檔案回倉庫
+permissions:
+  contents: write
 
 jobs:
   update_data:
@@ -21,16 +25,15 @@ jobs:
       - name: 安裝必要套件
         run: pip install requests beautifulsoup4
 
-      - name: 執行爬蟲 (兩次，間隔 30 秒)
-        run: |
-          python crawler.py
-          sleep 30
-          python crawler.py
+      - name: 執行爬蟲
+        # 這裡不需要跑兩次，重點在於 crawler.py 的抓取邏輯是否正確
+        run: python crawler.py
 
       - name: 提交並推送資料
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add bingo_data.json
+          # 如果檔案沒有變動，commit 會失敗，用 || exit 0 忽略它
           git commit -m "自動更新賓果資料: $(date)" || exit 0
           git push
