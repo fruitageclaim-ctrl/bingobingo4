@@ -1,54 +1,50 @@
 import requests
-from bs4 import BeautifulSoup
 import json
-import re
+from datetime import datetime
 
-def fetch_taiwan_lottery():
-    # 台灣彩券賓果賓果開獎結果網址
-    url = "https://www.taiwanlottery.com/lotto/result/bingo_bingo"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+def fetch_taiwan_lottery_api():
+    # 這是台彩賓果賓果的官方 API 連結
+    url = "https://api.taiwanlottery.com/TLCAPI_v10/Lottery/BingoBingoResult"
+    
+    # 設定查詢參數 (今天)
+    params = {
+        "Date": datetime.now().strftime("%Y-%m-%d")
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=20)
-        response.encoding = 'utf-8'
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # 執行請求
+        response = requests.get(url, params=params, timeout=15)
+        if response.status_code != 200:
+            print(f"API 連線失敗: {response.status_code}")
+            return
+
+        raw_data = response.json()
+        all_draws = raw_data.get('content', {}).get('bingoBingoResubValue', [])
         
         results = []
-        
-        # 台灣彩券的結構通常是由多個開獎區塊組成
-        # 尋找所有開獎期別區塊
-        items = soup.select('.lotto_result_table')
-        
-        for item in items:
-            # 提取期別 (例如：115012506)
-            period_tag = item.select_one('.lotto_result_title .period')
-            if not period_tag:
-                continue
-            period = re.sub(r'\D', '', period_tag.get_text())
-            
-            # 提取 20 個開獎號碼
-            # 官方通常使用特定 class 如 'ball_orange' 或 'ball_yellow'
-            ball_tags = item.select('.ball_tx .ball_orange')
-            balls = [int(b.get_text(strip=True)) for b in ball_tags if b.get_text(strip=True).isdigit()]
-            
-            # 確保抓到完整 20 顆球
-            if len(balls) >= 20:
+        for draw in all_draws:
+            period = draw.get('drawTerm') # 期別
+            # 台彩 API 提供的號碼是以逗號分隔的字串
+            numbers_str = draw.get('winningNumbers', '')
+            if numbers_str:
+                numbers = [int(n) for n in numbers_str.split(',')]
                 results.append({
                     "period": period,
-                    "numbers": sorted(balls[:20]) # 排序後存入
+                    "numbers": sorted(numbers)
                 })
         
         if results:
+            # 依期別排序 (最新在前面)
+            results.sort(key=lambda x: x['period'], reverse=True)
+            
             with open('bingo_data.json', 'w', encoding='utf-8') as f:
                 json.dump(results, f, ensure_ascii=False, indent=4)
-            print(f"✅ 成功從台灣彩券抓取 {len(results)} 期資料！")
+            print(f"✅ 成功抓取今天共 {len(results)} 期資料！")
         else:
-            print("❌ 官方網頁解析失敗，請檢查 Selector。")
+            print("❌ API 回傳內容中沒有開獎資料。")
             
     except Exception as e:
         print(f"💥 發生錯誤: {e}")
 
 if __name__ == "__main__":
-    fetch_taiwan_lottery()
+    fetch_taiwan_lottery_api()
