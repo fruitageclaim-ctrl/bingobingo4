@@ -7,37 +7,48 @@ from datetime import datetime
 import pytz
 import streamlit.components.v1 as components
 
-# --- 1. 爬蟲模組優化 ---
+# --- 1. 爬蟲與備援模組 (改用更穩定的 Auzo 來源) ---
 def fetch_bingo_data():
-    urls = ["https://winwin.tw/Bingo", "https://www.nanalotto.com/BINGO_BINGO"]
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+    # 改用更穩定的數據源，避開 winwin 對伺服器的封鎖
+    urls = [
+        "https://lotto.auzo.tw/bingobingo.php",
+        "https://www.nanalotto.com/BINGO_BINGO"
+    ]
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     
     for url in urls:
         try:
-            resp = requests.get(url, headers=headers, timeout=8)
+            resp = requests.get(url, headers=headers, timeout=10)
             resp.encoding = 'utf-8'
             soup = BeautifulSoup(resp.text, 'html.parser')
+            data = []
+
+            # 針對 Auzo 網站的解析邏輯
+            if "auzo.tw" in url:
+                rows = soup.find_all('tr')
+                for row in rows:
+                    cols = row.find_all('td')
+                    if len(cols) >= 2:
+                        period = cols[0].get_text(strip=True)
+                        if not period.isdigit(): continue
+                        # 抓取包含號碼的球
+                        nums = [int(n.get_text(strip=True)) for n in cols[1].find_all(['span', 'div', 'b']) if n.get_text(strip=True).isdigit()]
+                        if len(nums) >= 20:
+                            data.append({"period": period, "numbers": nums[:20]})
             
-            # winwin.tw 的結構通常在 table 的 tr 裡
-            rows = soup.find_all('tr')
-            extracted_data = []
+            # 備援網站解析
+            else:
+                rows = soup.select('table tr')
+                for row in rows:
+                    cols = row.find_all('td')
+                    if len(cols) >= 2:
+                        period = cols[0].get_text(strip=True)
+                        nums = [int(n.get_text(strip=True)) for n in cols[1].find_all(['span', 'div', 'b']) if n.get_text(strip=True).isdigit()]
+                        if len(nums) >= 20:
+                            data.append({"period": period, "numbers": nums[:20]})
             
-            for row in rows:
-                cols = row.find_all('td')
-                if len(cols) >= 2:
-                    period = cols[0].get_text(strip=True)
-                    # 抓取包含號碼的標籤 (winwin 常用 span class='nb' 或 'ball_blue')
-                    balls = cols[1].find_all(['span', 'div'])
-                    nums = [int(b.get_text(strip=True)) for b in balls if b.get_text(strip=True).isdigit()]
-                    
-                    if len(nums) >= 20:
-                        extracted_data.append({"period": period, "numbers": nums[:20]})
-            
-            if extracted_data:
-                return extracted_data
-        except Exception as e:
+            if data: return data
+        except:
             continue
     return []
 
@@ -62,37 +73,30 @@ def fibonacci_analysis(history):
     return sorted(final_pred)
 
 # --- 3. Streamlit 介面設定 ---
-st.set_page_config(page_title="Bingo Bingo 智慧分析預測器", layout="wide")
+st.set_page_config(page_title="Bingo Bingo 智慧預測器", layout="wide")
 
-# 強化的 CSS：美化選號按鈕
+# 選號面板極小化 CSS 優化
 st.markdown("""
     <style>
-    /* 側邊欄容器調整 */
-    section[data-testid="stSidebar"] > div:first-child {
-        width: 350px !important;
-        padding-top: 20px;
+    /* 側邊欄寬度與間距壓縮 */
+    section[data-testid="stSidebar"] { width: 260px !important; }
+    div[data-testid="column"] { padding: 0px !important; margin: 0px !important; }
+    
+    /* 按鈕極小化：縮小至 1/3 大小 */
+    .stButton > button { 
+        width: 100% !important; 
+        padding: 0px !important; 
+        font-size: 10px !important; 
+        height: 22px !important;
+        line-height: 22px !important;
+        margin-bottom: 1px !important;
+        min-height: 22px !important;
     }
     
-    /* 選號按鈕樣式 */
-    .stButton > button {
-        width: 100% !important;
-        height: 45px !important;
-        font-size: 18px !important;
-        font-weight: bold !important;
-        border-radius: 8px !important;
-        margin-bottom: 5px !important;
-        border: 1px solid #ddd !important;
-    }
+    /* 移除 Streamlit 預設的多餘間距 */
+    [data-testid="stHorizontalBlock"] { gap: 1px !important; }
     
-    /* 已選擇按鈕的顏色 (深藍色) */
-    div[data-testid="stHorizontalBlock"] button[kind="primary"] {
-        background-color: #1E3A8A !important;
-        color: white !important;
-        border: none !important;
-    }
-
-    /* 預測區文字 */
-    .predict-text { font-size: 14px; color: #1f2937; background: #f3f4f6; padding: 10px; border-radius: 8px; border-left: 5px solid #3b82f6; }
+    .predict-text { font-size: 11px; color: #555; background: #f0f2f6; padding: 5px; border-radius: 4px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -104,92 +108,87 @@ now_tw = datetime.now(tw_tz)
 
 st.title("🎰 Bingo Bingo 智慧分析預測器")
 
-# 獲取資料
 data = fetch_bingo_data()
 
-# --- 側邊欄：美化選號系統 ---
+# --- 側邊欄：模擬投注 (極小化佈局) ---
 st.sidebar.header("📝 模擬投注")
-star_type = st.sidebar.selectbox("選擇玩法", [f"{i}星" for i in range(1, 11)], index=5)
+star_type = st.sidebar.selectbox("玩法", [f"{i}星" for i in range(1, 11)], index=5)
 required_count = int(star_type.replace("星", ""))
 
-st.sidebar.markdown(f"**請點擊下方號碼選擇 {required_count} 個：**")
+# 10 欄佈局以極大化節省空間
+for row in range(8):
+    cols = st.sidebar.columns(10)
+    for col in range(10):
+        num = row * 10 + col + 1
+        is_selected = num in st.session_state.selected_nums
+        if cols[col].button(f"{num:02d}", key=f"btn_{num}", type="primary" if is_selected else "secondary"):
+            if num in st.session_state.selected_nums:
+                st.session_state.selected_nums.remove(num)
+            elif len(st.session_state.selected_nums) < required_count:
+                st.session_state.selected_nums.append(num)
+            st.rerun()
 
-# 改成 5 列顯示，按鈕更大更好按
-for row in range(16): # 16列 * 5個 = 80個
-    cols = st.sidebar.columns(5)
-    for col in range(5):
-        num = row * 5 + col + 1
-        if num <= 80:
-            is_selected = num in st.session_state.selected_nums
-            btn_type = "primary" if is_selected else "secondary"
-            if cols[col].button(f"{num:02d}", key=f"num_{num}", type=btn_type):
-                if num in st.session_state.selected_nums:
-                    st.session_state.selected_nums.remove(num)
-                elif len(st.session_state.selected_nums) < required_count:
-                    st.session_state.selected_nums.append(num)
-                st.rerun()
-
-st.sidebar.markdown("---")
 col_bet1, col_bet2 = st.sidebar.columns(2)
-if col_bet1.button("🎲 隨機選號"):
+if col_bet1.button("🎲 隨機", key="rand"):
     st.session_state.selected_nums = random.sample(range(1, 81), required_count)
     st.rerun()
-if col_bet2.button("🧹 清除重選"):
+if col_bet2.button("🧹 清除", key="clear"):
     st.session_state.selected_nums = []
     st.rerun()
 
-st.sidebar.info(f"📍 已選擇: {sorted(st.session_state.selected_nums)}")
+st.sidebar.caption(f"已選: {sorted(st.session_state.selected_nums)}")
 
-if st.sidebar.button("➕ 加入投注清單"):
+if st.sidebar.button("➕ 加入投注"):
     if len(st.session_state.selected_nums) == required_count:
         st.session_state.my_bets.append({
             "type": star_type,
             "nums": sorted(st.session_state.selected_nums),
             "time": now_tw.strftime("%H:%M:%S"),
-            "period": data[0]['period'] if data else "待同步"
+            "period": data[0]['period'] if data else "追蹤中"
         })
         st.session_state.selected_nums = []
-        st.sidebar.success("成功加入！")
         st.rerun()
-    else:
-        st.sidebar.error(f"需選滿 {required_count} 個")
 
-if st.sidebar.button("🗑️ 清空所有投注"):
+if st.sidebar.button("🗑️ 全部清空"):
     st.session_state.my_bets = []
     st.rerun()
 
-# 側邊欄分析區
+# --- 功能分析區 (側邊欄底部) ---
 st.sidebar.divider()
 if data:
-    st.sidebar.subheader("🔥 熱門號碼")
-    st.sidebar.markdown(f"<div class='predict-text'>{', '.join([f'{n:02d}' for n in get_hot_numbers(data)])}</div>", unsafe_allow_html=True)
-    st.sidebar.subheader("🔮 費波那契預測")
-    st.sidebar.markdown(f"<div class='predict-text'>{', '.join([f'{n:02d}' for n in fibonacci_analysis(data)])}</div>", unsafe_allow_html=True)
+    hot_nums = get_hot_numbers(data, top_n=10)
+    st.sidebar.write("🔥 熱門號碼")
+    st.sidebar.markdown(f"<div class='predict-text'>{', '.join([f'{n:02d}' for n in hot_nums])}</div>", unsafe_allow_html=True)
+    
+    pred_nums = fibonacci_analysis(data)
+    st.sidebar.write("🔮 預測號碼")
+    st.sidebar.markdown(f"<div class='predict-text'>{', '.join([f'{n:02d}' for n in pred_nums])}</div>", unsafe_allow_html=True)
+else:
+    st.sidebar.warning("伺服器端連線受限，請稍後重試")
 
 # --- 主畫面 ---
-t1, t2 = st.tabs(["即時開獎 (同步官方)", "預測分析與對獎"])
+t1, t2 = st.tabs(["即時看板", "數據分析對獎"])
 
 with t1:
-    st.subheader("🔗 winwin.tw 即時開獎看板")
-    components.iframe("https://winwin.tw/Bingo", height=700, scrolling=True)
+    st.subheader("🔗 實時開獎資訊")
+    # Iframe 保留 winwin 供視覺查看，但數據抓取避開它
+    components.iframe("https://winwin.tw/Bingo", height=600, scrolling=True)
 
 with t2:
     if data:
         latest = data[0]
-        st.success(f"✅ 資料已同步：最新期號 {latest['period']}")
+        st.success(f"✅ 數據源已對接 (Auzo)：第 {latest['period']} 期")
         
-        # 顯示最新號碼球
-        st.write("最新開獎號碼：")
-        ball_html = "".join([f'<span style="background-color:#1E3A8A; color:white; border-radius:50%; padding:5px 10px; margin:2px; display:inline-block; font-weight:bold;">{n:02d}</span>' for n in latest['numbers']])
-        st.markdown(ball_html, unsafe_allow_html=True)
-
+        prediction = fibonacci_analysis(data)
+        st.subheader("🔮 下期預測 (20碼)")
+        st.code(", ".join([f"{n:02d}" for n in prediction]))
+        
         if st.session_state.my_bets:
-            st.divider()
-            st.subheader("🎯 我的模擬投注核對")
+            st.subheader("🎯 投注對獎")
             for i, bet in enumerate(st.session_state.my_bets):
                 matches = set(bet['nums']) & set(latest['numbers'])
-                st.info(f"注項{i+1} ({bet['type']}): {bet['nums']} | 對中 **{len(matches)}** 顆")
+                st.write(f"注項{i+1}: {bet['nums']} | **中 {len(matches)} 顆** ({latest['period']}期)")
     else:
-        st.error("⚠️ 無法讀取歷史資料。請確認 GitHub 專案中已有 requirements.txt 並包含 beautifulsoup4。")
+        st.error("⚠️ 無法獲取歷史數據進行預測分析。")
 
-st.info(f"最後刷新 (台灣): {now_tw.strftime('%H:%M:%S')}")
+st.info(f"最後刷新: {now_tw.strftime('%Y-%m-%d %H:%M:%S')}")
