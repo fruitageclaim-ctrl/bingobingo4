@@ -1,50 +1,72 @@
 import requests
 from bs4 import BeautifulSoup
 import json
-import time
+import re
 
 def fetch_bingo():
+    # winwin 網站網址
     url = "https://winwin.tw/Bingo"
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Referer': 'https://winwin.tw/'
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=20)
         response.encoding = 'utf-8'
         soup = BeautifulSoup(response.text, 'html.parser')
         
         results = []
-        # 根據 winwin 結構，抓取所有表格列
-        rows = soup.find_all('tr')
+        # 定位開獎表格的所有列
+        rows = soup.select('tr')
         
         for row in rows:
             cols = row.find_all('td')
-            # 確保欄位數量正確 (期別, 號碼, ...)
+            # 確保欄位包含期別 (通常第一欄是期別，第二欄是號碼)
             if len(cols) >= 2:
-                period = cols[0].get_text(strip=True)
-                if not period.isdigit(): continue # 跳過非數字的標題列
+                period_text = cols[0].get_text(strip=True)
+                # 判斷是否為期別數字 (例如 115012506)
+                period_match = re.search(r'\d{9}', period_text)
+                if not period_match:
+                    continue
                 
-                # 抓取該列中所有的號碼球
-                # winwin 通常使用 span 或 div 包裝號碼
-                balls = [int(b.get_text(strip=True)) for b in cols[1].find_all(['span', 'div', 'b']) 
-                         if b.get_text(strip=True).isdigit()]
+                period = period_match.group()
                 
-                if len(balls) >= 20:
+                # 關鍵修正：精準抓取 20 個號碼
+                # winwin 的號碼通常在 td 內的 span 裡面，我們只取前兩位純數字
+                balls = []
+                # 尋找所有可能是號碼球的標籤
+                potential_balls = cols[1].find_all(['span', 'b', 'div'])
+                for b in potential_balls:
+                    txt = b.get_text(strip=True)
+                    # 使用正規表達式只抓取開頭的兩位數字，忽略上標的連莊次數
+                    num_match = re.match(r'^(\d{1,2})', txt)
+                    if num_match:
+                        balls.append(int(num_match.group(1)))
+                
+                # 賓果賓果每期固定 20 個號碼
+                # 使用 set 去重後取前 20 個，確保資料純淨
+                unique_balls = []
+                for n in balls:
+                    if n not in unique_balls:
+                        unique_balls.append(n)
+                
+                if len(unique_balls) >= 20:
                     results.append({
                         "period": period,
-                        "numbers": balls[:20]
+                        "numbers": unique_balls[:20]
                     })
         
         if results:
+            # 成功抓取後覆蓋 bingo_data.json
             with open('bingo_data.json', 'w', encoding='utf-8') as f:
                 json.dump(results, f, ensure_ascii=False, indent=4)
-            print(f"成功抓取 {len(results)} 期資料")
+            print(f"✅ 成功抓取 {len(results)} 期開獎資料！")
         else:
-            print("警告：未抓取到任何資料，請檢查網頁選擇器。")
+            print("❌ 依然抓不到資料，可能網頁有防爬蟲機制或結構大改。")
             
     except Exception as e:
-        print(f"爬蟲執行出錯: {e}")
+        print(f"💥 爬蟲發生錯誤: {e}")
 
 if __name__ == "__main__":
     fetch_bingo()
